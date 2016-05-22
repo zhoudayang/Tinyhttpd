@@ -31,7 +31,6 @@
 #define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
 #define STDIN   0
 #define STDOUT  1
-#define STDERR  2
 
 void accept_request(void *);
 void bad_request(int);
@@ -74,13 +73,14 @@ void accept_request(void *arg)
     }
     j=i;
     method[i] = '\0';
-
+    //如果既不是GET又不是POST方法,直接返回
+    //因为没有实现除了GET和POST之外的方法
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
         unimplemented(client);
         return;
     }
-
+    //如果是POST方法
     if (strcasecmp(method, "POST") == 0)
         cgi = 1;
 
@@ -120,8 +120,8 @@ void accept_request(void *arg)
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/index.html");
         if ((st.st_mode & S_IXUSR) ||
-                (st.st_mode & S_IXGRP) ||
-                (st.st_mode & S_IXOTH)    )
+            (st.st_mode & S_IXGRP) ||
+            (st.st_mode & S_IXOTH)    )
             cgi = 1;
         if (!cgi)
             serve_file(client, path);
@@ -133,7 +133,8 @@ void accept_request(void *arg)
 }
 
 /**********************************************************************/
-/* Inform the client that a request it has made has a problem.
+/* Inform the client that a request it has made has a problem
+ * 向client对应的套接字发送相关信息即可
  * Parameters: client socket */
 /**********************************************************************/
 void bad_request(int client)
@@ -192,7 +193,9 @@ void cannot_execute(int client)
 /**********************************************************************/
 /* Print out an error message with perror() (for system errors; based
  * on value of errno, which indicates system call errors) and exit the
- * program indicating an error. */
+ * program indicating an error.
+ * 错误处理函数,输出错误,并且中断程序执行
+ * */
 /**********************************************************************/
 void error_die(const char *sc)
 {
@@ -207,7 +210,7 @@ void error_die(const char *sc)
  *             path to the CGI script */
 /**********************************************************************/
 void execute_cgi(int client, const char *path,
-        const char *method, const char *query_string)
+                 const char *method, const char *query_string)
 {
     char buf[1024];
     int cgi_output[2];
@@ -364,6 +367,8 @@ void headers(int client, const char *filename)
 
 /**********************************************************************/
 /* Give a client a 404 not found status message. */
+/* 向客户端发送信息,没有找到相关资源
+ * */
 /**********************************************************************/
 void not_found(int client)
 {
@@ -434,18 +439,47 @@ int startup(u_short *port)
     if (httpd == -1)
         error_die("socket");
     memset(&name, 0, sizeof(name));
+    //ipv4地址
     name.sin_family = AF_INET;
+    //端口
     name.sin_port = htons(*port);
+    //对一个服务器上的所有网卡的多个本地ip地址都绑定端口号进行监听
     name.sin_addr.s_addr = htonl(INADDR_ANY);
+    //绑定端口
     if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
         error_die("bind");
+    //随机绑定端口号
     if (*port == 0)  /* if dynamically allocating a port */
     {
         socklen_t namelen = sizeof(name);
+        //随机获取一个sockaddr结构体实例
         if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)
             error_die("getsockname");
+        //获取结构体中的端口号
         *port = ntohs(name.sin_port);
     }
+    /*
+    DESCRIPTION         top
+
+    listen() marks the socket referred to by sockfd as a passive socket,
+    that is, as a socket that will be used to accept incoming connection
+    requests using accept(2).
+
+        The sockfd argument is a file descriptor that refers to a socket of
+    type SOCK_STREAM or SOCK_SEQPACKET.
+
+        The backlog argument defines the maximum length to which the queue of
+    pending connections for sockfd may grow.  If a connection request
+    arrives when the queue is full, the client may receive an error with
+    an indication of ECONNREFUSED or, if the underlying protocol supports
+    retransmission, the request may be ignored so that a later reattempt
+    at connection succeeds.
+        RETURN VALUE         top
+
+    On success, zero is returned.  On error, -1 is returned, and errno is
+    set appropriately.
+    */
+    //开始监听,允许的等待连接的队列长度设置为5
     if (listen(httpd, 5) < 0)
         error_die("listen");
     return(httpd);
@@ -454,7 +488,9 @@ int startup(u_short *port)
 /**********************************************************************/
 /* Inform the client that the requested web method has not been
  * implemented.
- * Parameter: the client socket */
+ * Parameter: the client socket
+ * 向客户端发送信息,没有实现的http方法
+ * */
 /**********************************************************************/
 void unimplemented(int client)
 {
@@ -495,11 +531,14 @@ int main(void)
     while (1)
     {
         client_sock = accept(server_sock,
-                (struct sockaddr *)&client_name,
-                &client_name_len);
+                             (struct sockaddr *)&client_name,
+                             &client_name_len);
         if (client_sock == -1)
             error_die("accept");
         /* accept_request(client_sock); */
+        //创建线程用于处理客户端发起的访问请求
+        //调用函数accept_request
+        //传入的参数为sockaddr_in 类型的结构体
         if (pthread_create(&newthread , NULL, (void *)accept_request, (void *)&client_sock) != 0)
             perror("pthread_create");
     }
