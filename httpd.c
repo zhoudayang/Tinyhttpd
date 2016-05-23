@@ -1,17 +1,5 @@
-/* J. David's webserver */
-/* This is a simple webserver.
- * Created November 1999 by J. David Blackstone.
- * CSE 4344 (Network concepts), Prof. Zeigler
- * University of Texas at Arlington
- */
-/* This program compiles for Sparc Solaris 2.6.
- * To compile for Linux:
- *  1) Comment out the #include <pthread.h> line.
- *  2) Comment out the line that defines the variable newthread.
- *  3) Comment out the two lines that run pthread_create().
- *  4) Uncomment the line that runs accept_request().
- *  5) Remove -lsocket from the Makefile.
- */
+//这是一个简单的web服务器
+//实现了web服务器的get方法
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -25,24 +13,28 @@
 #include <pthread.h>
 #include <sys/wait.h>
 #include <stdlib.h>
-
+//判断是否是空格
 #define ISspace(x) isspace((int)(x))
 
 #define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
-#define STDIN   0
-#define STDOUT  1
-
+//接收请求
 void accept_request(void *);
-void bad_request(int);
+//发送文件
 void cat(int, FILE *);
-void cannot_execute(int);
+//显示错误
 void error_die(const char *);
-void execute_cgi(int, const char *, const char *, const char *);
+//执行cgi程序
+//从客户端读取请求
 int get_line(int, char *, int);
+//发送header
 void headers(int, const char *);
+//没有找到文件
 void not_found(int);
+//发送文件
 void serve_file(int, const char *);
+//服务器初始化
 int startup(u_short *);
+// 未实现的方法
 void unimplemented(int);
 
 /**********************************************************************/
@@ -52,6 +44,7 @@ void unimplemented(int);
 /**********************************************************************/
 void accept_request(void *arg)
 {
+    //获取参数  client 对应的文件读写锚点
     int client = *(int*)arg;
     char buf[1024];
     size_t numchars;
@@ -66,6 +59,12 @@ void accept_request(void *arg)
 
     numchars = get_line(client, buf, sizeof(buf));
     i = 0; j = 0;
+    /*
+     * 下面是 buf中的内容示例
+     * GET / HTTP/1.1
+     * GET /index.html HTTP/1.1
+     */
+    //buf[i]非空,且数组method不越界
     while (!ISspace(buf[i]) && (i < sizeof(method) - 1))
     {
         method[i] = buf[i];
@@ -77,81 +76,51 @@ void accept_request(void *arg)
     //因为没有实现除了GET和POST之外的方法
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
+        //返回 出错信息
         unimplemented(client);
         return;
     }
     //如果是POST方法
-    if (strcasecmp(method, "POST") == 0)
-        cgi = 1;
-
+    if (strcasecmp(method, "POST") == 0) {
+        //返回 出错信息
+        unimplemented(client);
+        return;
+    }
+    //跳过空格
     i = 0;
     while (ISspace(buf[j]) && (j < numchars))
         j++;
+    //获取url
     while (!ISspace(buf[j]) && (i < sizeof(url) - 1) && (j < numchars))
     {
         url[i] = buf[j];
         i++; j++;
     }
     url[i] = '\0';
-
-    if (strcasecmp(method, "GET") == 0)
-    {
-        query_string = url;
-        while ((*query_string != '?') && (*query_string != '\0'))
-            query_string++;
-        if (*query_string == '?')
-        {
-            cgi = 1;
-            *query_string = '\0';
-            query_string++;
-        }
-    }
-
+    //读取的文件路径为服务器程序所在目录下的htdocs文件夹中
     sprintf(path, "htdocs%s", url);
+    //如果url是/ 返回index.html
     if (path[strlen(path) - 1] == '/')
         strcat(path, "index.html");
+    //如果没有找到文件
     if (stat(path, &st) == -1) {
+        //丢弃 无意义的字符
         while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
+
+        //没有找到请求的资源
         not_found(client);
     }
     else
     {
+        //如果是目录,定位到该目录下的index.html文件
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/index.html");
-        if ((st.st_mode & S_IXUSR) ||
-            (st.st_mode & S_IXGRP) ||
-            (st.st_mode & S_IXOTH)    )
-            cgi = 1;
-        if (!cgi)
-            serve_file(client, path);
-        else
-            execute_cgi(client, path, method, query_string);
+        serve_file(client, path);
     }
-
     close(client);
 }
 
-/**********************************************************************/
-/* Inform the client that a request it has made has a problem
- * 向client对应的套接字发送相关信息即可
- * Parameters: client socket */
-/**********************************************************************/
-void bad_request(int client)
-{
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 400 BAD REQUEST\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "Content-type: text/html\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "<P>Your browser sent a bad request, ");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "such as a POST without a Content-Length.\r\n");
-    send(client, buf, sizeof(buf), 0);
-}
 
 /**********************************************************************/
 /* Put the entire contents of a file out on a socket.  This function
@@ -160,6 +129,7 @@ void bad_request(int client)
  * Parameters: the client socket descriptor
  *             FILE pointer for the file to cat */
 /**********************************************************************/
+//向客户端发送文件,采用缓冲区读取文件,并将缓冲区中读取的文件内容发送到客户端
 void cat(int client, FILE *resource)
 {
     char buf[1024];
@@ -172,23 +142,6 @@ void cat(int client, FILE *resource)
     }
 }
 
-/**********************************************************************/
-/* Inform the client that a CGI script could not be executed.
- * Parameter: the client socket descriptor. */
-/**********************************************************************/
-void cannot_execute(int client)
-{
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 500 Internal Server Error\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-type: text/html\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<P>Error prohibited CGI execution.\r\n");
-    send(client, buf, strlen(buf), 0);
-}
 
 /**********************************************************************/
 /* Print out an error message with perror() (for system errors; based
@@ -203,102 +156,6 @@ void error_die(const char *sc)
     exit(1);
 }
 
-/**********************************************************************/
-/* Execute a CGI script.  Will need to set environment variables as
- * appropriate.
- * Parameters: client socket descriptor
- *             path to the CGI script */
-/**********************************************************************/
-void execute_cgi(int client, const char *path,
-                 const char *method, const char *query_string)
-{
-    char buf[1024];
-    int cgi_output[2];
-    int cgi_input[2];
-    pid_t pid;
-    int status;
-    int i;
-    char c;
-    int numchars = 1;
-    int content_length = -1;
-
-    buf[0] = 'A'; buf[1] = '\0';
-    if (strcasecmp(method, "GET") == 0)
-        while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
-            numchars = get_line(client, buf, sizeof(buf));
-    else if (strcasecmp(method, "POST") == 0) /*POST*/
-    {
-        numchars = get_line(client, buf, sizeof(buf));
-        while ((numchars > 0) && strcmp("\n", buf))
-        {
-            buf[15] = '\0';
-            if (strcasecmp(buf, "Content-Length:") == 0)
-                content_length = atoi(&(buf[16]));
-            numchars = get_line(client, buf, sizeof(buf));
-        }
-        if (content_length == -1) {
-            bad_request(client);
-            return;
-        }
-    }
-    else/*HEAD or other*/
-    {
-    }
-
-
-    if (pipe(cgi_output) < 0) {
-        cannot_execute(client);
-        return;
-    }
-    if (pipe(cgi_input) < 0) {
-        cannot_execute(client);
-        return;
-    }
-
-    if ( (pid = fork()) < 0 ) {
-        cannot_execute(client);
-        return;
-    }
-    sprintf(buf, "HTTP/1.0 200 OK\r\n");
-    send(client, buf, strlen(buf), 0);
-    if (pid == 0)  /* child: CGI script */
-    {
-        char meth_env[255];
-        char query_env[255];
-        char length_env[255];
-
-        dup2(cgi_output[1], STDOUT);
-        dup2(cgi_input[0], STDIN);
-        close(cgi_output[0]);
-        close(cgi_input[1]);
-        sprintf(meth_env, "REQUEST_METHOD=%s", method);
-        putenv(meth_env);
-        if (strcasecmp(method, "GET") == 0) {
-            sprintf(query_env, "QUERY_STRING=%s", query_string);
-            putenv(query_env);
-        }
-        else {   /* POST */
-            sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
-            putenv(length_env);
-        }
-        execl(path, NULL);
-        exit(0);
-    } else {    /* parent */
-        close(cgi_output[1]);
-        close(cgi_input[0]);
-        if (strcasecmp(method, "POST") == 0)
-            for (i = 0; i < content_length; i++) {
-                recv(client, &c, 1, 0);
-                write(cgi_input[1], &c, 1);
-            }
-        while (read(cgi_output[0], &c, 1) > 0)
-            send(client, &c, 1, 0);
-
-        close(cgi_output[0]);
-        close(cgi_input[1]);
-        waitpid(pid, &status, 0);
-    }
-}
 
 /**********************************************************************/
 /* Get a line from a socket, whether the line ends in a newline,
@@ -412,13 +269,17 @@ void serve_file(int client, const char *filename)
         numchars = get_line(client, buf, sizeof(buf));
 
     resource = fopen(filename, "r");
+    //没有找到文件
     if (resource == NULL)
         not_found(client);
     else
     {
+        //向客户端发送header信息
         headers(client, filename);
+        //向客户端发送文件
         cat(client, resource);
     }
+    //关闭文件
     fclose(resource);
 }
 
@@ -519,7 +380,7 @@ void unimplemented(int client)
 int main(void)
 {
     int server_sock = -1;
-    u_short port = 4000;
+    u_short port = 8888;
     int client_sock = -1;
     struct sockaddr_in client_name;
     socklen_t  client_name_len = sizeof(client_name);
@@ -542,7 +403,6 @@ int main(void)
         if (pthread_create(&newthread , NULL, (void *)accept_request, (void *)&client_sock) != 0)
             perror("pthread_create");
     }
-
     close(server_sock);
 
     return(0);
